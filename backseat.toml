@@ -1,0 +1,11 @@
+model = "gpt-5.4-mini"
+speech_model = "eleven_flash_v2_5"
+# Faster timing for testing; restore 30/60 for a quieter companion.
+sample_seconds = 15
+cooldown_seconds = 15
+# Fraction of thumbnail pixels with a luminance difference greater than 20.
+change_threshold = 0.02
+# Preserve readable text; smaller regions work better than an entire ultrawide.
+image_max_edge = 2560
+api_timeout_seconds = 20
+stale_seconds = 60
