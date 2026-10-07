@@ -123,3 +123,107 @@ def test_cli_forced_once_works_without_observer_events(tmp_path, monkeypatch, ca
     assert cli.main() == 0
     assert "supervision" in capsys.readouterr().out
     assert not (tmp_path / ".backseat").exists()
+
+
+@pytest.mark.parametrize(
+    ("silent", "voice", "eleven_keys", "expected"),
+    [
+        (True, "auto", True, None),
+        (False, "auto", True, "elevenlabs"),
+        (False, "auto", False, "say"),
+        (False, "say", True, "say"),
+        (False, "elevenlabs", False, "elevenlabs"),
+    ],
+)
+def test_speech_engine_prefers_elevenlabs_only_when_configured(
+    monkeypatch, silent, voice, eleven_keys, expected
+):
+    for name in cli.ELEVENLABS:
+        if eleven_keys:
+            monkeypatch.setenv(name, "value")
+        else:
+            monkeypatch.delenv(name, raising=False)
+    assert cli.speech_engine(silent, voice) == expected
+
+
+def test_local_voice_needs_only_openai_key_but_elevenlabs_needs_its_keys(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    for name in cli.ELEVENLABS:
+        monkeypatch.delenv(name, raising=False)
+    assert cli.credentials("say")["elevenlabs_key"] == ""
+    with pytest.raises(ValueError, match="ELEVENLABS_API_KEY"):
+        cli.credentials("elevenlabs")
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["once", "--recap"],
+        ["run", "--fresh", "--observe-only", "--recap"],
+        ["run", "--fresh", "--observe-only", "--captions"],
+    ],
+)
+def test_recap_and_captions_reject_unsupported_modes(monkeypatch, capsys, argv):
+    monkeypatch.setattr(sys, "argv", ["backseat", *argv])
+    monkeypatch.setattr(cli, "check_permission", lambda: pytest.fail("Validate flags first"))
+    assert cli.main() == 1
+    assert "Backseat:" in capsys.readouterr().err
+
+
+def test_persona_flag_overrides_config(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "backseat.toml").write_text('persona = "coach"\n')
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        sys, "argv", ["backseat", "once", "--text-only", "--persona", "commentator"]
+    )
+    monkeypatch.setattr(cli, "check_permission", lambda: None)
+    monkeypatch.setattr(cli, "choose_monitor", lambda number: {})
+    monkeypatch.setattr(cli, "select_region", lambda *args: Region())
+    received = []
+
+    def providers(settings, *args, **kwargs):
+        received.append(settings)
+        return Providers()
+
+    monkeypatch.setattr(cli, "Providers", providers)
+    assert cli.main() == 0
+    assert received[0].persona == "commentator"
+
+
+def test_quit_delivers_recap_before_shutdown(tmp_path, monkeypatch, capsys):
+    import threading
+
+    from backseat.core import Recap
+
+    observed = threading.Event()
+
+    class RecapProviders(Providers):
+        def write(self, trigger, context, preferences):
+            # The writer only runs after an observation was applied to the task.
+            observed.set()
+            return super().write(trigger, context, preferences)
+
+        def recap(self, events, context, preferences):
+            return Recap(
+                speak=True,
+                remark="Tests passed once and you left. Retire undefeated.",
+                supporting_event_ids=[events[0]["id"]],
+            )
+
+    def read_commands(commands):
+        observed.wait(timeout=10)
+        commands.put("quit")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        sys, "argv", ["backseat", "run", "--fresh", "--text-only", "--recap", "--monitor", "1"]
+    )
+    monkeypatch.setattr(cli, "check_permission", lambda: None)
+    monkeypatch.setattr(cli, "choose_monitor", lambda number: {})
+    monkeypatch.setattr(cli, "select_region", lambda *args: Region())
+    monkeypatch.setattr(cli, "Providers", RecapProviders)
+    monkeypatch.setattr(cli, "read_commands", read_commands)
+    assert cli.main() == 0
+    assert "Retire undefeated" in capsys.readouterr().out

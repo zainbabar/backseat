@@ -218,3 +218,67 @@ def test_sdk_validation_failure_becomes_content_free_output_error(provider):
     with pytest.raises(ModelOutputError, match="required structure") as caught:
         provider.write({"id": "e1"}, {}, [])
     assert "PRIVATE" not in str(caught.value)
+
+
+def test_persona_changes_voice_but_keeps_commentary_rules(provider):
+    from backseat.providers import PERSONAS
+
+    provider.config = Config(persona="documentary")
+    provider.model.responses.parse.return_value = result(
+        Joke(speak=False, candidates=[], selected_index=-1)
+    )
+    provider.write({"id": "e1"}, {}, [])
+    prompt = provider.model.responses.parse.call_args.kwargs["input"][0]["content"]
+    assert PERSONAS["documentary"] in prompt
+    assert PERSONAS["friend"] not in prompt
+    assert "No coding advice" in prompt
+    assert "Never quote secrets/private text" in prompt
+
+
+def test_every_config_persona_has_a_prompt():
+    from typing import get_args
+
+    from backseat.core import Persona
+    from backseat.providers import PERSONAS
+
+    assert set(PERSONAS) == set(get_args(Persona))
+
+
+def test_recap_is_a_text_only_writer_request(provider):
+    from backseat.core import Recap
+
+    recap = Recap(speak=True, remark="Quite a session.", supporting_event_ids=["e1"])
+    provider.model.responses.parse.return_value = result(recap)
+    assert provider.recap([{"id": "e1"}], {"goal": "practice"}, ["dry"]) == recap
+    payload = provider.model.responses.parse.call_args.kwargs
+    assert payload["model"] == "comedy"
+    assert payload["text_format"] is Recap
+    assert all(p["type"] == "input_text" for p in payload["input"][1]["content"])
+    assert "closing recap" in payload["input"][0]["content"]
+    assert provider.stats.writer.requests == 1
+
+
+def test_local_voice_keeps_text_out_of_arguments(provider, monkeypatch):
+    import subprocess
+
+    from backseat import providers as module
+
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        output = command[command.index("-o") + 1]
+        with open(output, "wb") as handle:
+            handle.write(b"FORMaudio")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+    provider.config = Config(say_voice="Samantha", api_timeout_seconds=7)
+    assert provider.speech is None
+    assert provider.synthesize("Secret-free remark.") == b"FORMaudio"
+    command, kwargs = calls[0]
+    assert command[0] == "say" and command[-2:] == ["-v", "Samantha"]
+    assert "Secret-free remark." not in " ".join(command)
+    assert kwargs["input"] == b"Secret-free remark."
+    assert kwargs["timeout"] == 7 and kwargs["check"] is True
+    assert provider.stats.speech_requests == 1

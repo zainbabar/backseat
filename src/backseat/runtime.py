@@ -21,6 +21,9 @@ from .core import (
 )
 from .memory import MemoryStoreError
 
+CONTROL_DESCRIPTION = "Testing mode requested commentary on this captured scene"
+CAPTION_LINGER_SECONDS = 2.0
+
 
 class Player:
     def __init__(self):
@@ -29,6 +32,7 @@ class Player:
 
     def start(self, audio: bytes):
         self.stop()
+        # afplay detects the format from content, so `say` AIFF also plays from this file.
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as handle:
             self.path = Path(handle.name)
             handle.write(audio)
@@ -94,6 +98,7 @@ class Runner:
         chatty=False,
         force_remark=False,
         capture_dir=None,
+        captions=None,
         player=None,
         clock=time.monotonic,
         emit=print,
@@ -102,8 +107,9 @@ class Runner:
         self.providers, self.region, self.memory = providers, region, memory
         self.text_only, self.observe_only, self.once = text_only, observe_only, once
         self.chatty, self.force_remark = chatty, force_remark
-        self.capture_dir = capture_dir
+        self.capture_dir, self.captions = capture_dir, captions
         self.player, self.clock, self.emit = player or Player(), clock, emit
+        self.started_at = timestamp()
         self.observer_executor = ThreadPoolExecutor(max_workers=1)
         self.writer_executor = ThreadPoolExecutor(max_workers=1)
         self.observer_pending = None
@@ -138,6 +144,8 @@ class Runner:
         self.previous_captured_at = None
         self.trigger = None
         self.stop_playback(interrupted=True)
+        if self.captions:
+            self.captions.hide()
 
     def pause(self):
         self.session.paused = True
@@ -301,6 +309,10 @@ class Runner:
         self.session.task.remarks.append(remark)
         self.session.task.updated = timestamp()
         self.emit(f"backseat: {remark.text}")
+        if self.captions:
+            # Spoken captions stay up until playback ends; printed ones get reading time.
+            seconds = None if audio else reading_seconds(remark.text)
+            self.captions.show(remark.text, self.region, seconds)
         if audio:
             self.playing_entry = remark
         else:
@@ -355,7 +367,7 @@ class Runner:
                 # A real user request, not a fabricated change on the desktop.
                 control = Event(
                     time=pending.observed_at,
-                    description="Testing mode requested commentary on this captured scene",
+                    description=CONTROL_DESCRIPTION,
                     evidence="User enabled forced commentary; no task progress is implied.",
                 )
                 task.events.append(control)
@@ -549,12 +561,70 @@ class Runner:
                     if status != 0:
                         self.emit("Audio playback failed; check your output device.")
                     self.stop_playback(interrupted=status != 0)
+                    if self.captions:
+                        self.captions.linger(CAPTION_LINGER_SECONDS)
             self.poll_observer(now)
             self.poll_writer(now)
             self.schedule_writer(now)
             self.schedule_observer(now)
         except MemoryStoreError as exc:
             self.fail(exc, "memory")
+        if self.captions:
+            self.captions.update()
+
+    def recap(self):
+        """Blocking end-of-session remark, run once from the main thread before close()."""
+        # Discard in-flight work first so nothing else plays over or after the recap.
+        self.invalidate()
+        events = [
+            event
+            for event in self.session.task.events
+            if event.valid
+            and not event.uncertain
+            and event.time >= self.started_at
+            and event.description != CONTROL_DESCRIPTION
+        ]
+        if not events:
+            self.emit("Recap skipped: no certain events were observed this session.")
+            return
+        self.emit("Writing session recap...")
+        try:
+            result = self.providers.recap(
+                [event.model_dump() for event in events],
+                self.session.task.context(),
+                list(self.session.preferences),
+            )
+            if not result.speak:
+                self.emit("Recap: nothing worth saying.")
+                return
+            if not set(result.supporting_event_ids) <= {event.id for event in events}:
+                raise ModelOutputError("unknown event reference")
+            audio = None if self.text_only else self.providers.synthesize(result.remark)
+            remark = Remark(
+                text=result.remark,
+                premise="session recap",
+                supporting_event_ids=result.supporting_event_ids,
+                interrupted=audio is not None,
+            )
+            self.session.task.remarks.append(remark)
+            self.session.task.updated = timestamp()
+            self.save()
+            self.emit(f"backseat: {remark.text}")
+            if self.captions:
+                self.captions.show(remark.text, self.region, reading_seconds(remark.text))
+            if audio is None:
+                return
+            self.player.start(audio)
+            # Ctrl+C here propagates to the CLI, whose close() stops playback.
+            while (status := self.player.poll()) is None:
+                if self.captions:
+                    self.captions.update()
+                time.sleep(0.1)
+            if status == 0:
+                remark.interrupted = False
+                self.save()
+        except Exception as exc:
+            self.fail(exc, "recap")
 
     def close(self):
         self.closed = True
@@ -570,6 +640,10 @@ class Runner:
             self.observer_executor.shutdown(wait=True, cancel_futures=True)
             self.writer_executor.shutdown(wait=True, cancel_futures=True)
             self.providers.close()
+
+
+def reading_seconds(text):
+    return max(4.0, 0.4 * len(text.split()))
 
 
 def stage_capture_error(exc):

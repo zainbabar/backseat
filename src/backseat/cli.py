@@ -7,11 +7,13 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import get_args
 
 from dotenv import load_dotenv
 
+from .captions import Captions
 from .capture import CaptureError, check_permission, monitors, select_region
-from .core import Config, Stats, Task, timestamp
+from .core import Config, Persona, Stats, Task, timestamp
 from .memory import MemoryStore, MemoryStoreError
 from .providers import Providers
 from .runtime import Runner
@@ -38,7 +40,26 @@ def parser():
         metavar="SECONDS",
         help="Override observation interval and speech cooldown for this run (minimum 1 second)",
     )
-    result.add_argument("--text-only", action="store_true", help="Skip ElevenLabs and audio")
+    result.add_argument("--text-only", action="store_true", help="Print remarks; skip all audio")
+    result.add_argument(
+        "--voice",
+        choices=["auto", "elevenlabs", "say"],
+        default="auto",
+        help="Speech engine. auto uses ElevenLabs when its keys are set, else the macOS voice",
+    )
+    result.add_argument(
+        "--persona",
+        choices=get_args(Persona),
+        help="Commentary style for this run (default: persona in config, else friend)",
+    )
+    result.add_argument(
+        "--captions",
+        action="store_true",
+        help="Show each remark as a subtitle beside (never over) the watched region",
+    )
+    result.add_argument(
+        "--recap", action="store_true", help="Deliver a short session recap on quit (run only)"
+    )
     result.add_argument(
         "--chatty",
         action="store_true",
@@ -119,17 +140,27 @@ def read_commands(commands):
     commands.put("quit")
 
 
-def credentials(text_only):
-    names = ["OPENAI_API_KEY"]
-    if not text_only:
-        names += ["ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID"]
+ELEVENLABS = ["ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID"]
+
+
+def speech_engine(silent, voice):
+    if silent:
+        return None
+    if voice == "auto":
+        return "elevenlabs" if all(os.getenv(name, "").strip() for name in ELEVENLABS) else "say"
+    return voice
+
+
+def credentials(engine):
+    names = ["OPENAI_API_KEY"] + (ELEVENLABS if engine == "elevenlabs" else [])
     missing = [name for name in names if not os.getenv(name, "").strip()]
     if missing:
         raise ValueError("Missing " + ", ".join(missing) + ". Fill .env using .env.example.")
+    eleven = engine == "elevenlabs"
     return dict(
         openai_key=os.environ["OPENAI_API_KEY"],
-        elevenlabs_key="" if text_only else os.environ["ELEVENLABS_API_KEY"],
-        voice_id="" if text_only else os.environ["ELEVENLABS_VOICE_ID"],
+        elevenlabs_key=os.environ["ELEVENLABS_API_KEY"] if eleven else "",
+        voice_id=os.environ["ELEVENLABS_VOICE_ID"] if eleven else "",
     )
 
 
@@ -137,6 +168,7 @@ def main():
     args = parser().parse_args()
     runner = None
     memory = None
+    captions = None
     stats = Stats()
     try:
         if args.command != "run" and (args.resume or args.fresh):
@@ -149,19 +181,23 @@ def main():
             raise ValueError("Use --fresh --task TEXT for a new named task, or --resume alone.")
         if args.command == "run" and not sys.stdin.isatty() and not (args.resume or args.fresh):
             raise ValueError("Noninteractive run requires --resume or --fresh.")
+        if args.recap and args.command != "run":
+            raise ValueError("--recap applies to run.")
+        if args.observe_only and (args.recap or args.captions):
+            raise ValueError("--recap and --captions need the writer; drop --observe-only.")
         config = Config.load(args.config)
+        overrides = {}
         if args.interval is not None:
-            config = Config.model_validate(
-                {
-                    **config.model_dump(),
-                    "sample_seconds": args.interval,
-                    "cooldown_seconds": args.interval,
-                }
-            )
+            overrides.update(sample_seconds=args.interval, cooldown_seconds=args.interval)
+        if args.persona is not None:
+            overrides["persona"] = args.persona
+        if overrides:
+            config = Config.model_validate({**config.model_dump(), **overrides})
         load_dotenv(Path(".env"))
-        keys = (
-            credentials(args.text_only or args.observe_only) if args.command != "preview" else None
-        )
+        engine = speech_engine(args.text_only or args.observe_only, args.voice)
+        keys = credentials(engine) if args.command != "preview" else None
+        if engine == "say" and args.command != "preview":
+            print("Voice: built-in macOS say. Set ElevenLabs keys in .env for a custom voice.")
         check_permission()
         region = select_region(choose_monitor(args.monitor), config.image_max_edge)
         if region is None:
@@ -173,6 +209,8 @@ def main():
                 region.capture().save(args.save_captures / "preview.png")
             print("Capture preview confirmed. No API calls made.")
             return 0
+        if args.captions:
+            captions = Captions()
         memory = MemoryStore(readonly=args.command == "once")
         task = choose_task(memory, args, interactive=sys.stdin.isatty())
         preferences = memory.preferences()
@@ -192,6 +230,7 @@ def main():
             chatty=args.chatty,
             force_remark=args.force_remark,
             capture_dir=args.save_captures,
+            captions=captions,
         )
         commands = queue.Queue()
         if args.command == "run":
@@ -209,6 +248,8 @@ def main():
             verb = verb.lower()
             text = text.strip()
             if verb == "quit":
+                if args.recap:
+                    runner.recap()
                 break
             if verb == "pause":
                 runner.pause()
@@ -285,6 +326,8 @@ def main():
         if runner:
             runner.close()
             print(stats.summary())
+        if captions:
+            captions.close()
         if memory:
             memory.close()
 

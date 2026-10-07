@@ -655,3 +655,114 @@ def test_forced_mode_does_not_fallback_on_authentication_or_invalidated_output(s
     runner.tick()
     assert runner.session.paused
     assert player.starts == 0 and not runner.session.task.remarks
+
+
+class FakeCaptions:
+    def __init__(self):
+        self.calls = []
+
+    def show(self, text, region, seconds=None):
+        self.calls.append(("show", text, seconds))
+        return True
+
+    def linger(self, seconds):
+        self.calls.append(("linger", seconds))
+
+    def hide(self):
+        self.calls.append(("hide",))
+
+    def update(self):
+        pass
+
+
+def test_captions_follow_audio_and_hide_on_invalidation(setup):
+    runner, _, _, _, player = setup
+    runner.captions = captions = FakeCaptions()
+    play(runner)
+    assert ("show", "That empty function is really carrying the team.", None) in captions.calls
+    player.status = 0
+    runner.tick()
+    assert captions.calls[-1] == ("linger", 2.0)
+    runner.pause()
+    assert captions.calls[-1] == ("hide",)
+
+
+def test_text_only_captions_get_reading_time(setup):
+    runner, _, _, _, _ = setup
+    runner.captions = captions = FakeCaptions()
+    runner.text_only = True
+    observe(runner)
+    runner.writer_executor.finish()
+    runner.tick()
+    shown = [call for call in captions.calls if call[0] == "show"]
+    assert shown and shown[0][2] >= 4
+
+
+def recap_result(runner, **overrides):
+    from backseat.core import Recap
+
+    ids = [event.id for event in runner.session.task.events]
+    fields = dict(speak=True, remark="What a journey. The function stayed empty.")
+    fields["supporting_event_ids"] = ids
+    fields.update(overrides)
+    return Recap(**fields)
+
+
+def test_recap_is_skipped_without_events_from_this_session(setup):
+    from backseat.core import Event
+
+    runner, _, providers, _, _ = setup
+    runner.session.task.events.append(
+        Event(time="2000-01-01T00:00:00+00:00", description="old failure", evidence="FAIL")
+    )
+    providers.recap = lambda *args: pytest.fail("No recap request without session events")
+    runner.recap()
+    assert not runner.session.task.remarks
+
+
+def test_text_recap_uses_only_certain_session_events_and_is_saved(setup):
+    from backseat.core import Event
+    from backseat.runtime import CONTROL_DESCRIPTION
+
+    runner, _, providers, _, player = setup
+    runner.text_only = True
+    observe(runner)
+    real = runner.session.task.events[-1].id
+    runner.session.task.events.append(Event(description=CONTROL_DESCRIPTION, evidence="flag"))
+    received = []
+
+    def recap(events, context, preferences):
+        received.append(events)
+        return recap_result(runner, supporting_event_ids=[real])
+
+    providers.recap = recap
+    runner.recap()
+    assert [event["id"] for event in received[0]] == [real]
+    assert runner.session.task.remarks[-1].premise == "session recap"
+    assert providers.speech_calls == 0 and player.starts == 0
+
+
+def test_recap_rejects_events_outside_this_session(setup):
+    runner, _, providers, _, _ = setup
+    runner.text_only = True
+    observe(runner)
+    providers.recap = lambda *args: recap_result(runner, supporting_event_ids=["invented"])
+    runner.recap()
+    assert not runner.session.task.remarks
+    assert runner.had_error
+
+
+def test_spoken_recap_waits_for_playback_and_records_completion(setup):
+    runner, _, providers, _, player = setup
+    observe(runner)
+    runner.writer_pending = None  # Recap must not depend on regular commentary.
+    providers.recap = lambda *args: recap_result(runner)
+
+    def finished_start(audio):
+        player.starts += 1
+        player.status = 0
+
+    player.start = finished_start
+    runner.recap()
+    assert providers.speech_calls == 1 and player.starts == 1
+    assert runner.session.task.remarks[-1].interrupted is False

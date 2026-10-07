@@ -25,6 +25,29 @@ def check_permission():
         )
 
 
+def set_focusable(focusable: bool):
+    """Allow Backseat's windows to take keyboard focus, or never activate the app.
+
+    Showing any Qt window activates the Python app on macOS, which would pull keyboard
+    focus away from the user's editor or terminal. The Prohibited activation policy keeps
+    captions passive and returns focus to the previously active app after selection.
+    """
+    from PySide6.QtGui import QGuiApplication
+
+    if sys.platform != "darwin" or QGuiApplication.platformName() != "cocoa":
+        return
+    objc = ctypes.cdll.LoadLibrary("/usr/lib/libobjc.dylib")
+    objc.objc_getClass.restype = objc.sel_registerName.restype = ctypes.c_void_p
+    objc.objc_getClass.argtypes = objc.sel_registerName.argtypes = [ctypes.c_char_p]
+    send = objc.objc_msgSend
+    send.restype, send.argtypes = ctypes.c_void_p, [ctypes.c_void_p, ctypes.c_void_p]
+    app = send(objc.objc_getClass(b"NSApplication"), objc.sel_registerName(b"sharedApplication"))
+    send.restype = ctypes.c_bool
+    send.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
+    # NSApplicationActivationPolicyRegular = 0, NSApplicationActivationPolicyProhibited = 2.
+    send(app, objc.sel_registerName(b"setActivationPolicy:"), 0 if focusable else 2)
+
+
 def monitors():
     with mss.mss() as screen:
         return [dict(monitor) for monitor in screen.monitors[1:]]
@@ -86,6 +109,7 @@ def select_region(monitor: dict, max_edge: int = 2560) -> Region | None:
     finally:
         if _app is not None:
             _dismiss_capture_ui(_app)
+            set_focusable(False)
 
 
 def _select_region(monitor: dict, max_edge: int) -> Region | None:
@@ -97,6 +121,8 @@ def _select_region(monitor: dict, max_edge: int) -> Region | None:
     _app = QApplication.instance() or QApplication([])
     app = _app
     app.setQuitOnLastWindowClosed(False)
+    # The selector needs keyboard focus for Escape; captions may have prohibited it.
+    set_focusable(True)
     image = display_image(monitor)
     data = image.tobytes()
     pixmap = QPixmap.fromImage(

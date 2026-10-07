@@ -111,3 +111,17 @@ def test_resume_reestablishes_current_scene_without_rewriting_history():
     assert old.time == "yesterday" and not old.active
     assert fresh == [task.events[-1].id]
     assert task.events[-1].time == "today"
+
+
+def test_recap_requires_grounded_short_remark_or_clean_silence():
+    from backseat.core import Recap
+
+    assert Recap(speak=True, remark=" Nice. ", supporting_event_ids=["e1"]).remark == "Nice."
+    assert not Recap(speak=False, remark="", supporting_event_ids=[]).speak
+    for fields in (
+        dict(speak=True, remark="word " * 61, supporting_event_ids=["e1"]),
+        dict(speak=True, remark="Nice.", supporting_event_ids=[]),
+        dict(speak=False, remark="Nice.", supporting_event_ids=[]),
+    ):
+        with pytest.raises(ValidationError):
+            Recap(**fields)

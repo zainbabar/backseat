@@ -2,10 +2,13 @@ import tomllib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
 from PIL import Image, ImageChops
 from pydantic import BaseModel, Field, model_validator
+
+Persona = Literal["friend", "commentator", "documentary", "coach"]
 
 
 def timestamp():
@@ -25,6 +28,9 @@ class Config(BaseModel):
     observer_model: str | None = None
     writer_model: str | None = None
     speech_model: str = "eleven_v4"
+    # macOS `say` voice name (see `say -v '?'`); None uses the system voice.
+    say_voice: str | None = None
+    persona: Persona = "friend"
     sample_seconds: float = Field(default=30, ge=1)
     cooldown_seconds: float = Field(default=60, ge=0)
     change_threshold: float = Field(default=0.02, gt=0, le=1)
@@ -87,6 +93,24 @@ class Joke(BaseModel):
     @property
     def selected(self):
         return self.candidates[self.selected_index] if self.speak else None
+
+
+class Recap(BaseModel):
+    speak: bool
+    remark: str
+    supporting_event_ids: list[str]
+
+    @model_validator(mode="after")
+    def validate_recap(self):
+        self.remark = self.remark.strip()
+        if self.speak:
+            if not self.remark or len(self.remark.split()) > 60:
+                raise ValueError("Recaps must contain 1–60 words")
+            if not self.supporting_event_ids:
+                raise ValueError("A recap needs supporting events")
+        elif self.remark or self.supporting_event_ids:
+            raise ValueError("Silence requires an empty remark and no events")
+        return self
 
 
 class Event(BaseModel):

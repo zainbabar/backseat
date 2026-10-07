@@ -22,10 +22,11 @@ Backseat is a macOS Python prototype that observes a user-selected screen region
 ## Architecture map
 
 - `src/backseat/cli.py`: CLI, configuration/environment loading, consent flow, and command loop.
-- `src/backseat/capture.py`: macOS permission check, display capture, region selection, and preview.
+- `src/backseat/capture.py`: macOS permission check, display capture, region selection, preview, and app focus policy.
+- `src/backseat/captions.py`: opt-in subtitle bubble. It must stay outside the watched region (captures would otherwise read it back) and must never take keyboard focus.
 - `src/backseat/core.py`: configuration validation, commentary schema, image-change detection, session history, and stats.
 - `src/backseat/memory.py`: local SQLite task memory and humor preferences; validates saved data before use and never overwrites unreadable files.
-- `src/backseat/providers.py`: OpenAI observer/writer calls, speech synthesis, and the observer/writer prompts.
+- `src/backseat/providers.py`: OpenAI observer/writer/recap calls, ElevenLabs or local macOS `say` speech, personas, and prompts. Personas change voice only; the commentary rules apply to all of them.
 - `src/backseat/runtime.py`: asynchronous request lifecycle, pause/reselection invalidation, playback, and shutdown.
 - `backseat.toml`: checked-in runtime tuning with quiet defaults; use `--interval` for faster testing.
 - `tests/`: unit tests use fakes and should not capture a desktop or spend provider credits.

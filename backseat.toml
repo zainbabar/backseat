@@ -3,6 +3,10 @@ model = "gpt-5.4-mini"
 observer_model = "gpt-5.4-mini"
 writer_model = "gpt-5.4-mini"
 speech_model = "eleven_v4"
+# Used when ElevenLabs keys are absent or with --voice say. List voices: say -v '?'
+# say_voice = "Samantha"
+# Commentary style: friend, commentator, documentary, or coach. --persona overrides it.
+persona = "friend"
 # Quiet companion timing. For quick testing, pass --interval 10 instead of editing.
 sample_seconds = 30
 cooldown_seconds = 60
