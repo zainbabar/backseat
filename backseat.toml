@@ -3,9 +3,9 @@ model = "gpt-5.4-mini"
 observer_model = "gpt-5.4-mini"
 writer_model = "gpt-5.4-mini"
 speech_model = "eleven_v4"
-# Faster timing for testing; restore 30/60 for a quieter companion.
-sample_seconds = 10
-cooldown_seconds = 10
+# Quiet companion timing. For quick testing, pass --interval 10 instead of editing.
+sample_seconds = 30
+cooldown_seconds = 60
 # Fraction of thumbnail pixels with a luminance difference greater than 20.
 change_threshold = 0.02
 # Preserve readable text; smaller regions work better than an entire ultrawide.

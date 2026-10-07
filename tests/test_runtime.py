@@ -4,7 +4,7 @@ import pytest
 from PIL import Image
 
 from backseat.core import Candidate, Config, EventProposal, Joke, ModelOutputError, Observation
-from backseat.memory import MemoryError, MemoryStore
+from backseat.memory import MemoryStore, MemoryStoreError
 from backseat.runtime import Runner
 
 
@@ -347,7 +347,7 @@ def test_storage_failure_pauses_without_erasing_existing_file(setup):
 
     class BrokenStore:
         def save(self, *args):
-            raise MemoryError("Could not save task memory.")
+            raise MemoryStoreError("Could not save task memory.")
 
     runner.memory = BrokenStore()
     observe(runner)

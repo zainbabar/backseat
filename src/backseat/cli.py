@@ -1,4 +1,5 @@
 import argparse
+import json
 import math
 import os
 import queue
@@ -11,7 +12,7 @@ from dotenv import load_dotenv
 
 from .capture import CaptureError, check_permission, monitors, select_region
 from .core import Config, Stats, Task, timestamp
-from .memory import MemoryError, MemoryStore
+from .memory import MemoryStore, MemoryStoreError
 from .providers import Providers
 from .runtime import Runner
 
@@ -105,7 +106,8 @@ def choose_monitor(number):
                 f"{index}: {display['width']}×{display['height']} "
                 f"at ({display['left']}, {display['top']})"
             )
-        number = int(input("Display to watch [1]: ").strip() or "1")
+        answer = input("Display to watch [1]: ").strip() or "1"
+        number = int(answer) if answer.isdigit() else 0
     if number < 1 or number > len(displays):
         raise ValueError(f"Display must be between 1 and {len(displays)}.")
     return displays[number - 1]
@@ -219,11 +221,11 @@ def main():
                 runner.pause()
                 parts = command.split()
                 try:
+                    if len(parts) > 2 or (len(parts) == 2 and not parts[1].isdigit()):
+                        raise ValueError("Use 'region' or 'region DISPLAY_NUMBER'.")
                     monitor = (
                         choose_monitor(int(parts[1])) if len(parts) == 2 else runner.region.monitor
                     )
-                    if len(parts) > 2:
-                        raise ValueError("Use 'region' or 'region DISPLAY_NUMBER'.")
                 except ValueError as exc:
                     print(exc)
                     if not was_paused:
@@ -245,17 +247,15 @@ def main():
                             runner.taste(text)
                         else:
                             runner.add_context(text, correction=verb == "correct")
-                    except MemoryError as exc:
+                    except MemoryStoreError as exc:
                         runner.fail(exc, "memory")
             elif verb in ("funny", "boring"):
                 try:
                     runner.feedback(verb)
-                except MemoryError as exc:
+                except MemoryStoreError as exc:
                     runner.fail(exc, "memory")
             elif verb == "memory":
                 # User explicitly requested this local context inspection.
-                import json
-
                 print(
                     json.dumps(
                         {
@@ -278,7 +278,7 @@ def main():
     except KeyboardInterrupt:
         print("\nStopping Backseat.")
         return 0
-    except (CaptureError, MemoryError, ValueError, EOFError) as exc:
+    except (CaptureError, MemoryStoreError, ValueError, EOFError) as exc:
         print(f"Backseat: {exc}", file=sys.stderr)
         return 1
     finally:

@@ -5,7 +5,7 @@ import pytest
 
 from backseat.cli import choose_task, read_commands
 from backseat.core import Event, Remark, Task
-from backseat.memory import MemoryError, MemoryStore
+from backseat.memory import MemoryStore, MemoryStoreError
 
 
 def options(**overrides):
@@ -64,13 +64,13 @@ def test_readonly_missing_store_does_not_create_a_file(tmp_path):
 def test_unreadable_or_future_version_memory_is_not_replaced(tmp_path):
     path = tmp_path / "memory.sqlite"
     path.write_bytes(b"this is not a database")
-    with pytest.raises(MemoryError):
+    with pytest.raises(MemoryStoreError):
         MemoryStore(path)
     assert path.read_bytes() == b"this is not a database"
     path.unlink()
     with sqlite3.connect(path) as db:
         db.execute("PRAGMA user_version=42")
-    with pytest.raises(MemoryError, match="unsupported version"):
+    with pytest.raises(MemoryStoreError, match="unsupported version"):
         MemoryStore(path)
     with sqlite3.connect(path) as db:
         assert db.execute("PRAGMA user_version").fetchone()[0] == 42

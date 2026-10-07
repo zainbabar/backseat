@@ -19,7 +19,7 @@ from .core import (
     thumbnail,
     timestamp,
 )
-from .memory import MemoryError
+from .memory import MemoryStoreError
 
 
 class Player:
@@ -226,7 +226,7 @@ class Runner:
         if stage == "observer":
             self.session.previous = None
             self.session.next_sample = self.clock() + self.session.config.sample_seconds
-        if isinstance(exc, MemoryError):
+        if isinstance(exc, MemoryStoreError):
             self.session.paused = True
             self.session.invalidate()
             self.trigger = None
@@ -553,14 +553,14 @@ class Runner:
             self.poll_writer(now)
             self.schedule_writer(now)
             self.schedule_observer(now)
-        except MemoryError as exc:
+        except MemoryStoreError as exc:
             self.fail(exc, "memory")
 
     def close(self):
         self.closed = True
         try:
             self.invalidate()
-        except MemoryError as exc:
+        except MemoryStoreError as exc:
             self.emit(str(exc))
             self.had_error = True
         finally:

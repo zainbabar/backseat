@@ -1,7 +1,16 @@
 [project]
 name = "backseat"
 version = "0.1.0"
-description = "A sarcastic friend watching over your desktop."
+description = "A sarcastic AI friend that watches a screen region you choose and comments out loud."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Zain Babar" }]
+classifiers = [
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
 requires-python = ">=3.12,<3.14"
 dependencies = [
   "openai>=1.100,<3",
@@ -15,6 +24,9 @@ dependencies = [
 
 [project.scripts]
 backseat = "backseat.cli:main"
+
+[project.urls]
+Repository = "https://github.com/zainbabar/backseat"
 
 [build-system]
 requires = ["hatchling"]

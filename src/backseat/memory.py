@@ -5,7 +5,7 @@ from pathlib import Path
 from .core import Task
 
 
-class MemoryError(RuntimeError):
+class MemoryStoreError(RuntimeError):
     pass
 
 
@@ -24,7 +24,7 @@ class MemoryStore:
                 self.db = sqlite3.connect(path)
             version = self.db.execute("PRAGMA user_version").fetchone()[0]
             if version not in (0, 1):
-                raise MemoryError("Memory has an unsupported version; it was not overwritten.")
+                raise MemoryStoreError("Memory has an unsupported version; it was not overwritten.")
             if not readonly or not path.exists():
                 with self.db:
                     self.db.execute(
@@ -38,14 +38,14 @@ class MemoryStore:
                     self.db.execute("PRAGMA user_version=1")
             self.last_task()  # Catch unreadable data before starting a run.
             self.preferences()
-        except MemoryError:
+        except MemoryStoreError:
             if hasattr(self, "db"):
                 self.db.close()
             raise
         except Exception as exc:
             if hasattr(self, "db"):
                 self.db.close()
-            raise MemoryError(
+            raise MemoryStoreError(
                 "Could not open or read local memory. Check .backseat/memory.sqlite; "
                 "the existing file was not replaced."
             ) from exc
@@ -57,7 +57,9 @@ class MemoryStore:
             ).fetchone()
             return Task.model_validate_json(row[0]) if row else None
         except Exception as exc:
-            raise MemoryError("Saved task memory is unreadable; it was not overwritten.") from exc
+            raise MemoryStoreError(
+                "Saved task memory is unreadable; it was not overwritten."
+            ) from exc
 
     def preferences(self):
         try:
@@ -67,7 +69,7 @@ class MemoryStore:
                 raise ValueError("Invalid preferences")
             return notes[-20:]
         except Exception as exc:
-            raise MemoryError("Saved humor preferences are unreadable.") from exc
+            raise MemoryStoreError("Saved humor preferences are unreadable.") from exc
 
     def save(self, task, preferences):
         if self.readonly:
@@ -85,7 +87,7 @@ class MemoryStore:
                     (json.dumps(preferences[-20:]),),
                 )
         except sqlite3.Error as exc:
-            raise MemoryError(
+            raise MemoryStoreError(
                 "Could not save task memory. Check disk space and permissions; "
                 "Backseat is paused to avoid silently losing context."
             ) from exc
