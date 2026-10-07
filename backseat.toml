@@ -1,8 +1,11 @@
 model = "gpt-5.4-mini"
-speech_model = "eleven_flash_v2_5"
+# Override stages independently; model remains the fallback for older configs.
+observer_model = "gpt-5.4-mini"
+writer_model = "gpt-5.4-mini"
+speech_model = "eleven_v4"
 # Faster timing for testing; restore 30/60 for a quieter companion.
-sample_seconds = 15
-cooldown_seconds = 15
+sample_seconds = 10
+cooldown_seconds = 10
 # Fraction of thumbnail pixels with a luminance difference greater than 20.
 change_threshold = 0.02
 # Preserve readable text; smaller regions work better than an entire ultrawide.

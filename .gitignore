@@ -9,3 +9,4 @@ captures/
 dist/
 *.egg-info/
 .DS_Store
+.backseat/
