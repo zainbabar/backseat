@@ -1,307 +1,245 @@
 # backseat
 
-A sarcastic friend watching over your shoulder while you use your computer.
-Select an area of your screen; Backseat follows what you're doing and occasionally
-speaks a short remark using your ElevenLabs voice.
+[![CI](https://github.com/zainbabar/backseat/actions/workflows/ci.yml/badge.svg)](https://github.com/zainbabar/backseat/actions/workflows/ci.yml)
+![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
+![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-This is a macOS Python prototype. It gives commentary only, without coding hints
-or LeetCode spoilers. Nothing launches automatically or runs after you quit.
+A sarcastic friend watching over your shoulder. Select part of your screen, and Backseat
+follows what you're doing and occasionally says something about it out loud.
 
-## Setup
+<!-- Demo: add a short GIF or video here. -->
+
+> *Observed failure, then pass:* "The test passed. I'll notify the historical society."
+> *Returned to an earlier bug:* "Welcome back. Your bug kept the seat warm."
+>
+> (Tone examples from the writer prompt, not recorded output.)
+
+It's commentary, not a copilot: no coding hints, fixes, or LeetCode spoilers. It only
+sees the rectangle you confirm, never launches on its own, and stops when you quit.
+
+## How it works
+
+```mermaid
+flowchart LR
+    A[Confirmed region<br/>sampled every N s] --> B{Changed?}
+    B -- no --> A
+    B -- yes --> C[Observer<br/>vision model]
+    C --> D[(Task memory<br/>summary + events)]
+    D --> E[Writer<br/>3 candidates or silence]
+    E --> F{Grounded,<br/>fresh, not repeated?}
+    F -- no --> Q[Stay quiet]
+    F -- yes --> G[Speech<br/>ElevenLabs or macOS say]
+    G --> H[Playback<br/>+ optional caption]
+```
+
+- **Two stages.** The **observer** sees the current and previous screenshots and turns them
+  into factual events, each with visible evidence; interpretations are marked uncertain. The
+  **writer** never sees screenshots. It gets text context and a fresh, certain event, then
+  writes three candidates and picks one, or chooses silence.
+- **Grounding is enforced in code, not just requested.** Every remark must cite the event IDs
+  it relies on. The runtime rejects unknown, uncertain, or retracted references and exact
+  repeats before anything is spoken.
+- **Nothing stale gets said.** One worker per stage, no queued frames. Pause, corrections,
+  task or region changes bump an epoch so in-flight output is discarded, and output older than
+  `stale_seconds` or superseded by a newer event never plays.
+- **Memory across sessions.** Task context, delivered remarks, and your feedback persist in
+  local SQLite, so it can make callbacks to earlier events and learn what you find funny.
+  Resumed tasks keep their original timestamps and start without a previous screenshot, so
+  yesterday's failures are history, not evidence about what's on screen now.
+- **Screen content is untrusted.** Text on screen and prior observations are treated as data;
+  they can't change the narrator's role or trigger actions.
+
+## Quick start
+
+Requires macOS, Python 3.12–3.13, and [uv](https://docs.astral.sh/uv/).
 
 ```sh
+git clone https://github.com/zainbabar/backseat && cd backseat
 uv sync
-# If you don't already have .env:
-cp .env.example .env
+cp .env.example .env   # add OPENAI_API_KEY; ElevenLabs keys are optional
 ```
 
-Fill `.env` with `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`, and your
-`ELEVENLABS_VOICE_ID`. No default voice is substituted. Only the OpenAI key is
-needed for `--text-only` or `--observe-only`; preview needs no keys.
-
-Enable your launching terminal/app (e.g. Ghostty) under **System Settings → Privacy
-& Security → Screen Recording**, then quit and reopen it. On some macOS versions
-this is named **Screen & System Audio Recording**. Backseat checks permission before
-capturing; it does not record audio or use a microphone.
-
-## Try it
+Enable your terminal under **System Settings → Privacy & Security → Screen Recording**
+(named **Screen & System Audio Recording** on some versions), then quit and reopen it.
+Backseat checks this before capturing. It never records audio or uses the microphone.
 
 ```sh
-# Select and confirm a screen region; no model calls or memory changes.
-uv run backseat preview
-
-# Isolated observer → writer test, printed rather than spoken.
-uv run backseat once --text-only --task "practicing binary search"
-
-# Follow a task and inspect its evolving context, without writing jokes or audio.
-uv run backseat run --fresh --observe-only --task "debugging my tests"
-
-# Full companion. It asks resume/fresh when neither flag is supplied.
-uv run backseat run
-
-# Skip the memory question and continue the most recently saved task.
-uv run backseat run --resume
+uv run backseat preview                 # select and confirm a region; no API calls
+uv run backseat once --text-only        # one observation and one printed remark
+uv run backseat run                     # the full companion; type commands while it runs
+uv run backseat run --persona documentary --captions --recap
 ```
 
-`once` uses saved humor preferences but has isolated task history and never saves
-its observations, jokes, or task back to disk. If the observer finds no new certain
-event, it exits without calling the writer or speech provider.
-Add `--force-remark` to request a remark even without a new event.
+Only `OPENAI_API_KEY` is required. Without `ELEVENLABS_API_KEY` and
+`ELEVENLABS_VOICE_ID`, Backseat speaks with the built-in macOS voice, so remark text stays on
+your machine. With them, it uses your ElevenLabs voice (no default voice is substituted).
 
-Use `--monitor 1` to skip the display prompt. Escape cancels selection. The preview
-lets you retry/cancel before model calls, and Backseat finishes removing its own
-windows before capturing. On an ultrawide, select your editor and/or problem rather
-than the whole display. Fractional crop coordinates handle display scaling. The
-preview uses the same proportional resizing as the model input (maximum edge 2560
-pixels by default); check that code is readable.
+## Personas
 
-`run` asks **resume last task** or **start fresh**, after region confirmation and
-before the command-reader thread starts. Fresh excludes prior task history from
-model prompts but retains humor preferences. `--fresh --task TEXT` names a new task;
-`--resume` continues the last task. They are mutually exclusive. Noninteractive
-runs require an explicit flag and should supply `--monitor` to skip the display prompt.
+`--persona NAME` (or `persona` in `backseat.toml`) changes the writer's voice. Every persona
+follows the same grounding and no-advice rules.
 
-## CLI reference
-
-```sh
-uv run backseat {preview,once,run} [FLAGS]
-uv run backseat --help
-```
-
-| Command | Behavior |
+| Persona | Style |
 | --- | --- |
-| `preview` | Select and confirm a crop without model calls or task-memory changes. |
-| `once` | Observe one crop and optionally write/speak one remark. Uses saved taste but isolated, unsaved task history. |
-| `run` | Keep observing until you quit. Save task context and feedback locally. |
+| `friend` (default) | Sarcastic friend hanging over your shoulder. |
+| `commentator` | Overexcited sports commentator; huge stakes for small moments, instant replays. |
+| `documentary` | Hushed nature-documentary narrator observing you in your natural habitat. |
+| `coach` | Weary, deadpan coach. Pure attitude, never technique or advice. |
 
-| Flag | What it does |
-| --- | --- |
-| `-h`, `--help` | Show all commands and flags, then exit. |
-| `--monitor NUMBER` | Choose a display by its 1-based number; omit to list displays and prompt. You still select and confirm a rectangle. |
-| `--config PATH` | Load a TOML configuration file instead of `backseat.toml` in the current directory. Missing files use built-in defaults, including 30-second checks and a 60-second cooldown. |
-| `--interval SECONDS` | Override both observation checks and the speech cooldown for this process. Accepts finite numbers ≥1, including decimals. Does not edit the TOML file or force regular speech. |
-| `--chatty` | Testing mode: request commentary on every observation interval, including unchanged screens. Bypass the normal speech cooldown and writer silence; allow repeated remarks. |
-| `--force-remark` | Testing mode: force a remark on the first capture. Works with `once` and `run`; subsequent `run` cycles use ordinary behavior unless `--chatty` is also set. |
-| `--text-only` | Print observations and selected jokes; skip ElevenLabs and audio. Only the OpenAI key is required. |
-| `--observe-only` | Run the observer without the writer or speech. Print current activity; save task context in `run`, or inspect the full context with `memory`. Only the OpenAI key is required. |
-| `--save-captures DIRECTORY` | Opt into saving submitted, original-resolution crops as PNGs. In `preview`, save the confirmed crop as `preview.png`. Use `captures` to stay within the existing Git ignore rule. |
-| `--resume` | In `run`, continue the most recently saved task without asking. If none exists, start a new task. Cannot combine with `--fresh` or `--task`. |
-| `--fresh` | In `run`, start new task history without asking. Retain humor preferences and archived tasks. Cannot combine with `--resume`. |
-| `--task "TEXT"` | Name a new task in `run`, or supply the goal for an isolated `once` test. Accepts 1–2000 characters; quote text containing spaces. Use with `--fresh` for an unambiguous new run. |
-
-`--observe-only` takes priority over `--text-only`, `--chatty`, and `--force-remark`:
-the writer is skipped entirely. `preview` makes no model calls, even with testing flags.
-`--resume` and `--fresh` are rejected for `once` and `preview`. Timing flags are most
-useful for `run`; `once` still captures only once, and `preview` does not schedule work.
-
-Examples:
-
-```sh
-# Continue the last task with 10-second testing timing.
-uv run backseat run --resume --interval 10
-
-# Request a remark every 10 seconds, including on idle/unchanged screens.
-uv run backseat run --resume --interval 10 --chatty
-
-# Force a single spoken remark; add --text-only to print it instead.
-uv run backseat once --force-remark
-
-# Force the first remark, then continue with ordinary observation/silence behavior.
-uv run backseat run --resume --force-remark
-
-# New practice task on display 1, with 20-second checks/cooldown and printed jokes.
-uv run backseat run --fresh --task "practicing binary search" --monitor 1 --interval 20 --text-only
-
-# Inspect one crop and its commentary, saving the crop for debugging.
-uv run backseat once --text-only --save-captures captures
-
-# Use settings from a separate TOML file you've created.
-uv run backseat run --fresh --config my-backseat.toml
-```
-
-## Controls
+## While it's running
 
 Type a command in the terminal and press Enter:
 
-- `pause` / `resume`: stop/restart capture and new requests. Pause stops audio and
-  discards pending output.
-- `region` / `region 2`: reselect on the current/second display. Keep task memory,
-  reset image comparison, and return to the previous paused/running state. Cancel
-  keeps the existing region.
-- `task practicing binary search`: save the old task and start a new one.
-- `context this is a practice exercise, not my production code`: give it context
-  that the screenshot alone cannot establish.
-- `taste less theatrical, more dry understatement`: save a humor preference.
-- `funny` / `boring`: rate the last delivered remark. Save the rated joke as a style
-  example, including across fresh tasks. This is prompt feedback, not model training.
-- `correct that's a stub, not a failed implementation`: correct task understanding,
-  mark prior events unreliable, and discard pending jokes. Rebuild factual context
-  from subsequent screenshots.
-- `memory`: explicitly print the compact task context and humor preferences locally.
-- `stats`: show observer and writer requests, tokens, and average latency separately,
-  plus speech requests and characters.
-- `quit` / Ctrl+C: stop audio and exit.
+| Command | Effect |
+| --- | --- |
+| `pause` / `resume` | Stop/restart capture and requests. Pausing stops audio and discards pending output. |
+| `region` / `region 2` | Reselect on the current/second display. Keeps task memory, resets image comparison. |
+| `task TEXT` | Archive the current task and start a new one. |
+| `context TEXT` | Add context a screenshot can't show ("this is a practice exercise"). |
+| `correct TEXT` | Fix a misunderstanding: prior events become unreliable and pending jokes are dropped. |
+| `taste TEXT` | Save a humor preference ("less theatrical, more dry understatement"). |
+| `funny` / `boring` | Rate the last remark. Saved as a style example, also for future tasks. |
+| `memory` | Print the compact task context and humor preferences. |
+| `stats` | Requests, tokens, and latency per stage, plus speech requests and characters. |
+| `quit` / Ctrl+C | Stop audio and exit. With `--recap`, `quit` first delivers the recap; Ctrl+C skips it. |
 
-Text commands accept 1–2000 characters and preserve case. Previously submitted HTTP
-requests cannot be recalled; shutdown waits for them to finish or time out. Their
-output will not be applied or played after invalidation.
+Text commands accept 1–2000 characters. Ending terminal input (EOF) works like `quit`.
+Backseat also prints short status lines (events found, writer skipped or silent) that report
+counts and decisions, never screen contents.
 
-## What it remembers and how it writes
+## Commands and flags
 
-The **observer** gets the current and previous successfully observed screenshot,
-the task's goal, a running summary, unresolved issues, and recent events. It records
-meaningful changes with visible evidence and timestamps. Uncertain interpretations
-are retained as uncertain and cannot trigger jokes. Resolved events remain historical
-facts that can support callbacks. It cannot see what happened between samples or
-while it was stopped.
+| Command | Behavior |
+| --- | --- |
+| `preview` | Select and confirm a crop. No model calls, no memory changes. |
+| `once` | Observe one crop and deliver at most one remark. Uses saved humor preferences but isolated, unsaved task history. If nothing certain is observed, it exits without calling the writer. |
+| `run` | Keep observing until you quit. Asks whether to resume the last task or start fresh. |
 
-The **writer** gets text context and a fresh certain event, without screenshots.
-New certain events reach the writer even when the observer doesn't mark them
-especially noteworthy; the writer decides whether there's a joke worth saying.
-It generates three candidate remarks and selects one, or chooses silence. The prompt
-encourages concrete details, understatement, mock concern, callbacks, and occasional
-celebration, with a 35-word limit. Each candidate references supporting event IDs;
-the runtime rejects unknown/unreliable references and exact repeated delivered jokes.
-Candidates are validated individually: an overlong or otherwise invalid unused joke
-does not discard a usable selection. If the selection is invalid, another valid
-candidate can be used; a batch with no usable candidates is rejected.
-Recently used premises and feedback help discourage repetitive phrasing.
+| Flag | What it does |
+| --- | --- |
+| `--monitor N` | Display number (1-based); omit to list displays and choose. |
+| `--persona NAME` | `friend`, `commentator`, `documentary`, or `coach` for this run. |
+| `--voice auto\|elevenlabs\|say` | Speech engine. `auto` (default) uses ElevenLabs when both keys are set, otherwise macOS `say`. |
+| `--text-only` | Print remarks; no audio. |
+| `--captions` | Show each remark as a click-through subtitle beside the watched region. See [Captions](#captions). |
+| `--recap` | `run` only: on `quit`, deliver a short recap built from this session's certain events. One extra writer call. |
+| `--resume` / `--fresh` | `run` only: skip the resume question. `--fresh` keeps humor preferences and archived tasks. |
+| `--task "TEXT"` | Name a new task (`run --fresh`) or the goal for a `once` test. |
+| `--interval SECONDS` | Override both the sampling interval and post-speech cooldown for this run (≥ 1). |
+| `--observe-only` | Run only the observer and print what it sees; no writer or speech. Can't combine with `--recap` or `--captions`. |
+| `--save-captures DIR` | Opt in to saving submitted crops as PNGs (`preview` saves `preview.png`). Use `captures` to stay within `.gitignore`. |
+| `--config PATH` | Load a different TOML file. A missing file uses built-in defaults. |
+| `--chatty` | Testing: request a remark every interval, even on unchanged screens; bypasses cooldown and writer silence. |
+| `--force-remark` | Testing: force a remark on the first capture only. |
 
-Prompt context includes a compact summary, the last 20 valid events, the last 20
-remarks, and up to 20 explicit context/taste notes. Saved records may be longer;
-they are not all resent every request. Resume keeps original timestamps and starts
-with no previous screenshot, so yesterday's failures are not visual evidence of
-what is happening now. The first new screenshot can re-establish a familiar scene
-as a current observation; its earlier timestamp stays in history. Restoring memory
-alone does not trigger an old joke.
+Noninteractive `run` requires `--resume` or `--fresh`, and should pass `--monitor`.
 
-Model-written summaries and jokes can still be inaccurate, repetitive, or unfunny.
-Event references establish which recorded facts were available, not whether every
-sentence is true. Use `correct`, `boring`, and `taste` to refine the result. The
-prompts are in `src/backseat/providers.py`.
+<details>
+<summary><b>Testing modes in detail</b></summary>
 
-## Timing and configuration
+`--chatty` and `--force-remark` ask the writer to speak even without a new event. If it
+still chooses silence or returns an unusable or malformed response, Backseat uses a short
+generic narrator line rather than retrying. Testing requests are recorded as narrator
+controls, never as desktop progress, and factual evidence checks stay in place. If the
+observer's output is rejected in testing mode, the writer gets no current scene facts.
+These modes bypass the post-speech cooldown and exact-repeat rejection. Pause, quit,
+corrections, region changes, and expiration still apply, and speech never overlaps.
+`--observe-only` takes priority over both.
 
-The checked-in `backseat.toml` uses **10-second observation checks** and **at least
-10 seconds after speech finishes before another remark** for testing. Restore
-`sample_seconds = 30` and `cooldown_seconds = 60` for quieter use.
+</details>
 
-Set both values for a single run with `--interval SECONDS`, without changing the file:
+## Captions
 
-```sh
-uv run backseat run --resume --interval 10
-```
+`--captions` shows each remark in a small subtitle bubble, which helps for screen recordings
+or when audio is off. The bubble is a real window, so screen captures would include it. To
+keep Backseat from reading its own captions, the bubble is only placed **outside** the
+watched region (below, above, right, or left of it, on the same display). If the region
+leaves no room, captions are skipped with a one-time notice. Select a region smaller than
+the full display to use them.
 
-The value must be at least 1 second. Omit the flag to use the configured values.
-This controls observation checks and the minimum gap after speech, rather than
-forcing a remark every interval.
+The bubble ignores clicks and never takes keyboard focus. Backseat keeps the macOS app in a
+non-activating state except during region selection, so focus also returns to your terminal
+after you confirm a region. Behavior over full-screen apps in their own Space is untested.
 
-For testing, add **`--chatty`** to request commentary at each observation interval,
-including unchanged screens. **`--force-remark`** forces only the first cycle.
-Both ask the writer to speak; if it chooses silence, supplies an unusable candidate,
-or returns malformed structured output,
-Backseat uses a short generic narrator line. Factual evidence checks remain in place;
-testing requests are labeled as narrator controls, never as desktop progress.
-If the observer output is rejected, testing mode supplies no current scene facts to
-the writer and keeps the previous successful screenshot for image comparisons.
-These modes bypass the normal post-speech cooldown and exact-repeat rejection.
-API errors still report failures. Speech never overlaps, requests are not queued,
-and slow calls or long audio can stretch the gap beyond the requested interval.
-Pause, quit, corrections, region changes, and output expiration still apply.
+## Configuration
 
-Observation continues while speech is being generated/played and during cooldown.
-Each stage has one worker; missed intervals and remarks are not queued. Essentially
-unchanged screenshots skip the observer call in ordinary mode. Small changes accumulate against the
-last successfully observed image. The writer runs only for an eligible fresh, certain event;
-there is no guaranteed remark every interval.
+`backseat.toml` in the launch directory. `--interval` and `--persona` override it per run.
 
-Voice mode also prints brief pipeline status: whether the observer found certain
-events, skipped the writer, began writing, or the writer chose silence. These status
-lines show counts and decisions, without printing screen contents. If `stats` shows
-observer requests but no writer requests, check these lines: no new certain events,
-`--observe-only`, or speech/cooldown can keep the writer from running. `resume`
-unpauses; it does not force a joke or bypass these conditions.
-
-Rejected model responses are reported as **model output rejected**, with a fixed
-reason such as a bad selection, missing structured output, or an unknown event
-reference. No response text or validation inputs are logged. These are separate
-from connection, authorization, or quota failures. Forced-mode writer fallbacks
-do not retry the model request.
-
-Pause, corrections, task/region changes, and preferences/feedback changes invalidate
-pending work. Output older than `stale_seconds`, referencing a resolved trigger, or
-superseded by a newer noteworthy event is discarded before playback. A remark already
-playing is allowed to finish when the observer discovers a new event. Audio interrupted
-by pause/quit is marked partial; completion is confirmed when `afplay` exits successfully.
-
-GPT-5.4 mini is initially used for both stages. `observer_model` and `writer_model`
-override them independently; `model` remains the fallback for older configs. Speech
-still uses your configured ElevenLabs voice and `speech_model`. Timeouts are bounded;
-failed observations can be retried on a later interval, while writer/speech failures
-are not immediately retried for the same event.
-
-All supported TOML settings:
-
-| Setting | Checked-in value | Meaning |
+| Setting | Default | Meaning |
 | --- | --- | --- |
-| `model` | `"gpt-5.4-mini"` | Fallback OpenAI model when a stage override is omitted. |
-| `observer_model` | `"gpt-5.4-mini"` | OpenAI model that interprets screenshots and updates context. |
-| `writer_model` | `"gpt-5.4-mini"` | OpenAI model that writes and selects jokes. |
-| `speech_model` | `"eleven_v4"` | ElevenLabs synthesis model; the voice ID comes from `.env`. |
-| `sample_seconds` | `10` | Seconds between eligible local screen checks, minimum 1. |
-| `cooldown_seconds` | `10` | Minimum gap after speech ends before the next remark; 0 or more. |
-| `change_threshold` | `0.02` | Fraction of thumbnail pixels that must change brightness by more than 20 before calling the observer; greater than 0 and at most 1. |
-| `image_max_edge` | `2560` | Maximum input-image width/height after proportional resizing; minimum 256 pixels. |
-| `api_timeout_seconds` | `20` | Provider timeout in seconds; must be positive. |
-| `stale_seconds` | `60` | Maximum age of a capture/event's pending output before it is discarded; must be positive. |
+| `model` | `"gpt-5.4-mini"` | Fallback OpenAI model for both stages. |
+| `observer_model` | `"gpt-5.4-mini"` | Model that reads screenshots and updates context. |
+| `writer_model` | `"gpt-5.4-mini"` | Model that writes, selects, and recaps remarks. |
+| `speech_model` | `"eleven_v4"` | ElevenLabs model; the voice ID comes from `.env`. |
+| `say_voice` | unset | macOS voice name for `say` (`say -v '?'` lists them). Unknown names fall back to the system voice. |
+| `persona` | `"friend"` | Commentary style; see [Personas](#personas). |
+| `sample_seconds` | `30` | Seconds between local screen checks (≥ 1). |
+| `cooldown_seconds` | `60` | Minimum gap after speech ends before the next remark (≥ 0). |
+| `change_threshold` | `0.02` | Fraction of thumbnail pixels whose brightness must change by > 20 before calling the observer. |
+| `image_max_edge` | `2560` | Maximum model-input width/height after proportional resizing (≥ 256). |
+| `api_timeout_seconds` | `20` | Timeout for each provider call and local speech synthesis. |
+| `stale_seconds` | `60` | Pending output older than this is discarded before delivery. |
 
-`--interval` takes priority over `sample_seconds` and `cooldown_seconds` loaded from
-the chosen file. Other settings stay as configured. Configuration and `.env` paths
-are resolved from the directory where you launch Backseat. Ending terminal input
-(EOF) quits a running session, just like `quit`.
+For quick testing without editing the file: `uv run backseat run --resume --interval 10`.
 
-## Local data and usage
+## Privacy and data
 
-Task summaries, contextual events, delivered remarks, feedback, and explicit humor
-preferences are saved in **`.backseat/memory.sqlite`**. This is local SQLite, without
-telemetry or an external memory service. Task changes archive previous records, but
-resume currently loads only the most recently updated task. Starting fresh does not
-delete archived tasks. After quitting Backseat, deleting `.backseat` resets all memory.
-Unreadable/unsupported databases are reported rather than replaced; save failures pause
-the companion rather than silently dropping context.
+- **Capture:** only the rectangle you select and confirm in the preview. Fractional crop
+  coordinates handle Retina scaling; the preview shows the exact model-input resolution so
+  you can check that text is readable. On an ultrawide, select your editor rather than
+  the whole display.
+- **Screenshots** stay in memory unless you pass `--save-captures`. Only cropped images are
+  sent to OpenAI, with `store=false` (provider retention policies still apply).
+- **Speech:** ElevenLabs receives only the selected remark. With the local voice, nothing
+  leaves your machine for speech; the text is passed to `say` over stdin.
+- **Memory:** task summaries, events, delivered remarks, feedback, and humor preferences are
+  saved in `.backseat/memory.sqlite` by `run`. Model-written summaries can include details
+  visible in your crops and are sent back as context on later calls. `once` and `preview`
+  never write memory. Delete `.backseat/` to reset everything. Unreadable databases are
+  reported, never overwritten; save failures pause the companion instead of silently
+  dropping context.
+- **Logs:** errors report fixed reasons and exception types only, never provider response
+  bodies, screen text, or keys. No telemetry, no background launch, no microphone, no
+  computer control.
 
-Screenshots remain in memory unless you opt into `--save-captures captures`. This
-saves submitted crops (or the confirmed preview) for debugging. Only cropped images
-are sent to OpenAI. Model-generated text summaries may include details visible in
-those crops; they are saved locally and sent as context on later calls. ElevenLabs
-receives only the selected remark. Memory, `.env`, captures, and environments are
-ignored by git. OpenAI requests use `store=false`; provider retention policies still
-apply. No microphone, automatic filesystem access, or computer control is included.
+## Cost and limits
 
-Two-stage processing and previous-image comparisons can use more tokens than the
-original prototype. Silence still costs an observer request, and writer silence costs
-a writer request. Session stats include calls whose output is later discarded; failed
-requests may not return token counts. Use provider dashboards for actual billing and
-spending limits. No automatic dollar estimate is provided.
+Each changed screen costs an observer request (two images after the first), and each
+eligible event costs a writer request, even when the writer stays silent. Unchanged screens
+are compared locally and cost nothing. `stats` shows per-stage tokens and latency; use your
+provider dashboards for billing and spending limits.
 
-## Verification
+Limitations worth knowing:
+
+- macOS only (Screen Recording permission, `afplay`, `say`).
+- It sees samples, not video: nothing between captures or while paused.
+- Model output can still be inaccurate, repetitive, or unfunny. Event references show which
+  recorded facts a remark used, not that every sentence is true. Use `correct`, `boring`,
+  and `taste` to steer it.
+- `--resume` loads only the most recently updated task.
+- Requests already sent can't be recalled. Shutdown waits for them to finish or time out,
+  but their output is never applied or played after invalidation.
+
+## Development
 
 ```sh
 uv run pytest
-uv run ruff check .
+uv run ruff check . && uv run ruff format --check .
 ```
 
-Tests use fake providers and images, plus offscreen Qt windows. They do not capture
-your desktop or spend credits. They cover event transitions, bounded context, saved
-memory and resume/fresh behavior, corrections, observation during audio/cooldown,
-stale/unsupported output, failures, feedback, and capture-window cleanup.
-Forced-mode tests cover unchanged screens, silence fallback, repeated cycles,
-malformed-response fallback, one-time forcing, pause, expiration, and non-overlapping
-audio. Mock HTTP tests exercise the real SDK's structured parsing, including a batch
-with overlong unused candidates.
+The tests use fake providers, fake images, and offscreen Qt. They never capture your desktop
+or spend API credits. They cover event transitions, grounding and repeat rejection, memory
+and resume/fresh, corrections, invalidation on pause/region/task changes, stale and
+malformed output, testing modes, persona prompts, recap validation, local-voice invocation,
+caption placement, and capture-window cleanup. Mock HTTP tests exercise the real OpenAI SDK's
+structured-output parsing.
 
-Before judging the experience, audition failed→passed tests, returning to an earlier
-problem, browser switching, and idle-screen silence in text mode, then with your
-voice. Check factual grounding, joke repetition, callbacks, and interruptions. A
-15-minute real session can measure latency and usage; unit tests do not establish
-humor quality or end-to-end performance on your G9.
+The tests don't establish humor quality, end-to-end latency, or how audio sounds. Caption
+on-screen placement, window level, and focus behavior were checked manually against the
+macOS window server (macOS 26) but aren't covered by CI. Prompts live in
+`src/backseat/providers.py`.
+
+## License
+
+[MIT](LICENSE)
